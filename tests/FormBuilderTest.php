@@ -239,6 +239,21 @@ class FormBuilderTest extends PHPUnit\Framework\TestCase
         $this->assertEquals($input1, $input2);
     }
 
+    public function testFormTextRepopulationConsumesArrayPayloadSequentially()
+    {
+        $this->formBuilder->setSessionStore($session = m::mock('Illuminate\Contracts\Session\Session'));
+
+        $session->shouldReceive('getOldInput')->times(3)->with('tags')->andReturn(['first', 'second']);
+
+        $input1 = $this->formBuilder->text('tags[]');
+        $input2 = $this->formBuilder->text('tags[]');
+        $input3 = $this->formBuilder->text('tags[]');
+
+        $this->assertEquals('<input name="tags[]" type="text" value="first">', $input1);
+        $this->assertEquals('<input name="tags[]" type="text" value="second">', $input2);
+        $this->assertEquals('<input name="tags[]" type="text">', $input3);
+    }
+
     public function testFormRepopulationWithMixOfArraysAndObjects()
     {
         $this->formBuilder->model(['user' => (object) ['password' => 'apple']]);
@@ -698,6 +713,13 @@ class FormBuilderTest extends PHPUnit\Framework\TestCase
           $month1);
         $this->assertStringContainsString('<select name="month"><option value="1" selected="selected">January</option>', $month2);
         $this->assertStringContainsString('<select id="foo" name="month"><option value="1">January</option>', $month3);
+    }
+
+    public function testFormSelectMonthWithCustomFormat()
+    {
+        $month = (string) $this->formBuilder->selectMonth('month', null, [], '%m - %b');
+
+        $this->assertStringContainsString('<select name="month"><option value="1">01 - Jan</option><option value="2">02 - Feb</option>', $month);
     }
 
     public function testFormCheckbox()

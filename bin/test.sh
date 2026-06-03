@@ -1,25 +1,17 @@
 #!/bin/bash
 
-# Define the PHP version and container name
-PHP_VERSION=8.4.0RC1
-CONTAINER_NAME=php-test-runner
+set -euo pipefail
 
-# Create a Docker container with PHP 8.4
-docker run --rm \
-    -v $(pwd):/app \
-    -w /app \
-    --name $CONTAINER_NAME \
-    php:$PHP_VERSION-cli bash -c "
-#    # Update and install necessary packages
-    apt-get update && apt-get install -y unzip git && \
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-    # Install composer
-    curl -sS https://getcomposer.org/installer | php && \
-    mv composer.phar /usr/local/bin/composer && \
+cd "$PROJECT_ROOT"
 
-    # Install dependencies
-    composer install && \
+PHPUNIT_ARGS=("$@")
 
-    # Run the test suite
-    vendor/bin/phpunit --display-deprecations
-    "
+if [ ${#PHPUNIT_ARGS[@]} -eq 0 ]; then
+    PHPUNIT_ARGS=(--no-coverage)
+fi
+
+docker compose build php
+docker compose run --rm php vendor/bin/phpunit "${PHPUNIT_ARGS[@]}"

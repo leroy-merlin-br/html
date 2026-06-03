@@ -4,10 +4,10 @@ namespace Collective\Html;
 
 use BadMethodCallException;
 use DateTime;
+use DateTimeImmutable;
 use Illuminate\Contracts\Routing\UrlGenerator;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Contracts\View\Factory;
-use Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -106,6 +106,13 @@ class FormBuilder
      * @var null
      */
     protected $type = null;
+
+    /**
+     * Cached array payloads from old input for repeated fields.
+     *
+     * @var array
+     */
+    protected $payload = [];
 
     /**
      * Create a new form builder instance.
@@ -216,6 +223,8 @@ class FormBuilder
     public function close()
     {
         $this->labels = [];
+
+        $this->payload = [];
 
         $this->model = null;
 
@@ -718,10 +727,87 @@ class FormBuilder
         $months = [];
 
         foreach (range(1, 12) as $month) {
-            $months[$month] = strftime($format, mktime(0, 0, 0, $month, 1));
+            $months[$month] = $this->formatMonth($month, $format);
         }
 
         return $this->select($name, $months, $selected, $options);
+    }
+
+    /**
+     * Format the month label using a strftime-compatible format.
+     *
+     * @param  int    $month
+     * @param  string $format
+     *
+     * @return string
+     */
+    protected function formatMonth($month, $format)
+    {
+        $date = DateTimeImmutable::createFromFormat('!m', sprintf('%02d', $month));
+
+        return $date->format($this->convertDateFormat($format));
+    }
+
+    /**
+     * Convert a subset of strftime tokens into DateTime::format tokens.
+     *
+     * @param string $format
+     *
+     * @return string
+     */
+    protected function convertDateFormat(string $format): string
+    {
+        $map = [
+            'a' => 'D',
+            'A' => 'l',
+            'b' => 'M',
+            'B' => 'F',
+            'd' => 'd',
+            'e' => 'j',
+            'H' => 'H',
+            'I' => 'h',
+            'm' => 'm',
+            'M' => 'i',
+            'p' => 'A',
+            'S' => 's',
+            'y' => 'y',
+            'Y' => 'Y',
+            '%' => '\\%',
+        ];
+
+        $converted = '';
+        $length = strlen($format);
+
+        for ($index = 0; $index < $length; $index++) {
+            $character = $format[$index];
+
+            if ($character === '%' && $index + 1 < $length) {
+                $token = $format[++$index];
+                $converted .= $map[$token] ?? ('\\%' . $this->escapeDateFormatCharacter($token));
+
+                continue;
+            }
+
+            $converted .= $this->escapeDateFormatCharacter($character);
+        }
+
+        return $converted;
+    }
+
+    /**
+     * Escape literal characters for DateTime::format.
+     *
+     * @param  string $character
+     *
+     * @return string
+     */
+    protected function escapeDateFormatCharacter($character)
+    {
+        if ($character === '\\') {
+            return '\\\\';
+        }
+
+        return ctype_alpha($character) ? '\\' . $character : $character;
     }
 
     /**
@@ -1274,6 +1360,8 @@ class FormBuilder
         if (in_array($name, $this->labels)) {
             return $name;
         }
+
+        return null;
     }
 
     /**
@@ -1296,15 +1384,14 @@ class FormBuilder
             return $old;
         }
 
-        if (function_exists('app')) {
-            $hasNullMiddleware = app("Illuminate\Contracts\Http\Kernel")
-                ->hasMiddleware(ConvertEmptyStringsToNull::class);
+        if ($this->convertsEmptyStringsToNull()) {
+            $errors = $this->view->shared('errors');
 
-            if ($hasNullMiddleware
-                && is_null($old)
+            if (
+                is_null($old)
                 && is_null($value)
-                && !is_null($this->view->shared('errors'))
-                && count(is_countable($this->view->shared('errors')) ? $this->view->shared('errors') : []) > 0
+                && ! is_null($errors)
+                && count(is_countable($errors) ? $errors : []) > 0
             ) {
                 return null;
             }
@@ -1322,6 +1409,36 @@ class FormBuilder
         if (isset($this->model)) {
             return $this->getModelValueAttribute($name);
         }
+
+        return null;
+    }
+
+    /**
+     * Determine if the current application converts empty strings to null.
+     *
+     * @return bool
+     */
+    protected function convertsEmptyStringsToNull()
+    {
+        if (! class_exists('Illuminate\\Container\\Container')) {
+            return false;
+        }
+
+        $container = \Illuminate\Container\Container::getInstance();
+
+        if (! $container || ! $container->bound('Illuminate\\Contracts\\Http\\Kernel')) {
+            return false;
+        }
+
+        $middleware = 'Illuminate\\Foundation\\Http\\Middleware\\ConvertEmptyStringsToNull';
+
+        if (! class_exists($middleware)) {
+            return false;
+        }
+
+        $kernel = $container->make('Illuminate\\Contracts\\Http\\Kernel');
+
+        return method_exists($kernel, 'hasMiddleware') && $kernel->hasMiddleware($middleware);
     }
 
     /**
@@ -1391,14 +1508,17 @@ class FormBuilder
                     $this->payload[$key] = collect($payload);
                 }
 
-                if (!empty($this->payload[$key])) {
-                    $value = $this->payload[$key]->shift();
-                    return $value;
+                if (! $this->payload[$key]->isEmpty()) {
+                    return $this->payload[$key]->shift();
                 }
+
+                return null;
             }
 
             return $payload;
         }
+
+        return null;
     }
 
     /**
@@ -1455,6 +1575,8 @@ class FormBuilder
     public function setSessionStore(Session $session)
     {
         $this->session = $session;
+
+        $this->payload = [];
 
         return $this;
     }
